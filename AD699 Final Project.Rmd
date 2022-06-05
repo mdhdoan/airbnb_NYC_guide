@@ -1,0 +1,619 @@
+---
+title: "AD 699 - Final Project Code and Report"
+date: December 16, 2020
+output: html_notebook
+---
+# GROUP 1 - TEAM A  
+#### Members: Minh Doan, Frank Guimond, Roisin Henry  
+*** 
+Library Usage:
+```{r}
+library(caret)
+library(caTools)
+library(cluster)
+library(cluster.datasets)
+library(dplyr)
+library(e1071)
+library(FNN)
+library(factoextra)
+library(GGally)
+library(ggmap)
+library(ggplot2)
+library(gridExtra)
+library(plotly)
+library(rpart)
+library(rpart.plot)
+library(tidyverse)
+```
+
+Reading airbnb data:
+```{r}
+df <- read.csv("metad699_train.csv", na.strings = c("", "NA"))
+```
+
+***
+## Step I: Data Preparation & Exploration (15 points)  
+Read your data into your local environment, and subset/filter the data so that you are dealing only with the records that pertain to your team’s city.  
+
+**I. Missing Values**  
+  A. Does your data contain any missing values and/or blank cells? If so, what can you do about this? Show the R code that you used to handle your missing values. Write one paragraph describing what you did, and why.  
+```{r}
+# 1. Missing values
+df.ny <- df %>%
+  filter(city=="NYC")
+drop_col_name = c("longitude", "latitude", "thumbnail_url", "city") 
+
+df.ny = df.ny[, !(names(df.ny) %in% drop_col_name)]
+
+# CHECKING NAs
+anyNA(df.ny)
+```
+ANSWER: Yes, our dataset of NYC Airbnb data contained many blank and missing value cells. Through running the is.na(df.ny), we received output TRUE, which indicated NA in data.
+
+In order to fix this, so we can successfully manipulate our data, we have a few steps to ‘clean’ this up to be more digestible for R.  We started with removing the NAs in the dataset, by replacing them all with the median values. Next, we tackled the factoring of our dataframe, as we noticed many of these values were stored as characters or an incorrect type for what they were each representing.
+``` {r}
+# This will get all columns with NA in them
+na_col_names = colnames(df.ny)[apply(is.na(df.ny), 2, any)] 
+na_col_names
+# NA replacement
+for (i in 1:ncol(df.ny)) {
+  df.ny[is.na(df.ny[,i]), i] = median(df.ny[, i], na.rm = TRUE)
+}
+rm(i)
+
+# Factoring df, god this took a long time
+df.ny$property_type = as.factor(df.ny$property_type)
+df.ny$room_type = as.factor(df.ny$room_type)
+df.ny$bed_type = as.factor(df.ny$bed_type)
+df.ny$cancellation_policy = as.factor(df.ny$cancellation_policy)
+df.ny$cleaning_fee = as.logical(df.ny$cleaning_fee)
+df.ny$first_review = as.Date(df.ny$first_review, format = "%Y-%m-%d")
+df.ny$host_has_profile_pic = as.factor(df.ny$host_has_profile_pic)
+df.ny$host_identity_verified = as.factor(df.ny$host_identity_verified)
+df.ny$host_response_rate = as.numeric(sub("%", "", df.ny$host_response_rate))/100
+df.ny$host_since = as.Date(df.ny$host_since, format = "%Y-%m-%d")
+df.ny$instant_bookable = as.factor(df.ny$instant_bookable)
+df.ny$last_review = as.Date(df.ny$host_since, format = "%Y-%m-%d")
+df.ny$neighbourhood = as.factor(df.ny$neighbourhood)
+df.ny$review_scores_rating = as.numeric(sub("%", "", df.ny$review_scores_rating))/100
+
+#Final check
+anyNA(df.ny)
+```
+This means we have cleared all NA data with their respective median value. 
+
+**II. Summary Statistics**  
+  A. Choose any five of the summary statistics functions shown in the textbook, class slides, or anywhere else to learn a little bit about your data set.   
+```{r}
+summary(df.ny$log_price)
+fivenum(df.ny$bedrooms)
+range(df.ny$bathrooms)
+tail(df.ny$accommodates)
+range(df.ny$accommodates)
+```
+  ANSWER: The five summary statistics functions we chose to run were: summary of the log price, five num on the bedrooms, range of the bathrooms, range of accommodates.
+
+  B. Describe your findings in 1-2 paragraphs.  
+  ANSWER:  
+  - The **summary** of the log price is essentially a good way to show us the range of log_price’s we can expect to see from our data, and it even buckets it into quartiles and gives us the median. So, if we see anything below 4.6, we know it is somewhat of an outlier. The **fivenum** we ran on the bedrooms is very similar to the summary function, only this time we are focusing on the number of bedrooms in these airbnbs.  Unsurprisingly, it seems that most of these places are going to have one bedroom.  The 10 is the absolute max from all the data, and we can safely assume that this is one or a small handful of airbnbs in the densely populated NYC. Our third statistic, shows the **range** of bathrooms.  The low of 0 causes some concern for us, as we sure hope no Airbnbs have no bathrooms, however we have to factor in the listings that are private rooms with shared bathrooms.  As expected, this number will likely remain low, which makes sense given that most homes do not have equal bathroom to bedroom ratios. The **tail** of accommodates is showing us the end values for this column, and most are 2, which makes sense for NYC.  But now we know we can also expect up to 5 to be a fairly normal accommodation amount. This intrigued us, as oftentimes accommodation numbers will be a popular filter when someone is searching for an Airbnb, so we looked into the **range** so we could get the maximum and minimum values for this column. This tells us that we will not have any listings that can accommodate more than 16 people, so we can assume that most of these listings are relatively small.   
+  
+**III. Visualization**  
+  A. Using ggplot, create any five plots that help to describe your data.  
+```{r}
+ggplot(df.ny, aes(x=neighbourhood,y=review_scores_rating))+geom_point()  + coord_flip()
+hoodratings <- ggplot(df.ny, aes(x=neighbourhood,y=review_scores_rating)) + geom_point()  + coord_flip()
+hoodratings + ggtitle("Review Ratings by Neighbourhood")
+
+# 1st Visualization
+ggplot(df.ny, aes(x=review_scores_rating))+geom_histogram(binwidth = .20) 
+```
+Our first visualization is a histogram showing the count of the review scores ratings in NYC.  We chose this visualization to give us a visual idea of where we can expect most ratings to fall and how competitive of a market this is.  We would argue the Airbnb market in NYC is tough and you will likely need a good review to succeed, as the majority of the scores fall between .6 and 1 (1 being the highest).  
+
+```{r}
+#2nd visualization
+ggplot(df.ny, aes(x=room_type))+geom_bar(fill=rainbow(3))
+```
+The second visualization we chose was the count of room types, which indicates that the majority of listings in the area are either the entire home/apartment or a private room.  This allows us to understand the market and what kind of listings are most popular and easier to get as a guest in this area. 
+
+
+```{r}
+# 3rd visualization
+ggplot(df.ny, aes(x=property_type)) + geom_bar(fill=rainbow(25)) + coord_flip()
+```
+Next, we decide to create a similar bar graph showing the different property types in NYC.  This helps us to determine what we can typically expect in this area, which is apartments.  It did not shock us that most listings are apartments, as NYC is a densely populated area, and homes or townhouses are much fewer to come by.  Lofts were another fairly popular listing, which likely accounts for the shared rooms we found in the room type graph. 
+
+```{r}
+# 4th visualization
+
+ggplot(df.ny, aes(x=cancellation_policy)) + geom_histogram(stat="count")
+```
+Our fourth graph is a histogram depicting the count of cancellation policies in the area.  This is interesting, because we were expecting the area to have strict cancellation policies.  However, it is possible there is also a large number of flexible/moderate policies because there are newer hosts or because the area is so competitive, it is fairly easy to find other people to rent the property, quickly. 
+
+```{r}
+#5th visualization
+
+ggplot(df.ny, aes(x=bedrooms, color= cancellation_policy)) + geom_bar(fill=rainbow(31))
+```
+   Lastly, we decided to see if the number of bedrooms affected the cancellation policy.  We did this, because our initial hypothesis is that a larger home or apartment would be more difficult to book so their policies are likely less flexible. There are few listings with bedrooms over 2, however we can see as there are more bedrooms, the only color we can see is green, which represents strict.  
+  
+## Step II: Prediction (20 points)
+**I. Create a multiple regression model with the outcome variable *log_price*.**  
+  A. Describe your process. How did you wind up including the independent variables that you kept, and discarding the ones that you didn’t keep? In a narrative of at least two paragraphs, discuss your process and your reasoning. In the write-up, be sure to talk about how you evaluated the quality of your model.  
+     
+```{r}
+########## Prediction - Create a Multiple Regression model with log_price ##########
+# Removing columns of variables NOT needed for our Prediction/MLR 
+df.ny.mlr <- df.ny[,-c(1,3,4,5,8,9,10,11,12,13,14,15,16,17,18,19,20)]
+View(df.ny.mlr)
+
+# Convert the zip code to be factored numeric here
+df.ny.mlr$zipcode = as.factor(df.ny.mlr$zipcode)
+df.ny.mlr$zipcode = as.numeric(df.ny.mlr$zipcode)
+```
+To begin the process of building a multiple regression model with an outcome of log_price for New York City Airbnbs, we started small.  First, we looked at all of the potential independent variables we could fit into this model and narrowed it down to all the ones that were numeric.  This left us with the potential independent variables of, accommodates, bathrooms, bedrooms, bed, number of reviews, and review scores ratings.  We did not include zip code as we attempted to change this to a factor and numeric, and which skewed the results.
+
+```{r}
+# using df.ny.mlr from now on - running cor test on variables we are unsure
+
+cor(df.ny.mlr$accommodates, df.ny.mlr$log_price)
+cor(df.ny.mlr$bathrooms, df.ny.mlr$log_price)
+cor(df.ny.mlr$number_of_reviews, df.ny.mlr$log_price)
+cor(df.ny.mlr$review_scores_rating, df.ny.mlr$log_price)
+cor(df.ny.mlr$bedrooms, df.ny.mlr$log_price)
+cor(df.ny.mlr$beds, df.ny.mlr$log_price)
+```
+We then looked at the correlation between each of these variables and the log_price.  These results led us to remove the following columns from our model: number of review and review scores rating. 
+
+```{r}
+# removing negative correlations and under .1, creating new df = df.ny.mlr2
+df.ny.mlr2 <- df.ny.mlr[,-c(4,5,6)]
+View(df.ny.mlr2)
+```
+Next, we ran correlation tests between all the potential combinations of independent variables to ensure we did not end up with any multicollinearity in our results. 
+
+```{r}
+# checking cor between independent variables
+cor(df.ny.mlr2$accommodates, df.ny.mlr2$bathrooms)
+cor(df.ny.mlr2$accommodates, df.ny.mlr2$bedrooms)
+cor(df.ny.mlr2$accommodates, df.ny.mlr2$beds)
+cor(df.ny.mlr2$bedrooms,df.ny.mlr2$beds)
+cor(df.ny.mlr2$bedrooms,df.ny.mlr2$bathrooms)
+cor(df.ny.mlr2$bathrooms,df.ny.mlr2$beds)
+```
+Once we determined which independent variables had strong correlations, accommodates and bedrooms, accommodates and beds, bedrooms and beds, we knew we could not have any combination where these pairs would end up being the input variables.  
+
+```{r}
+########## now we can run this as MLR ##########
+# fit <- lm(y~x1+x2+x3, data=mydata)
+# summary(fit)
+
+model <- lm(log_price~bathrooms+accommodates+bedrooms, data= df.ny.mlr2)
+summary(model)
+
+model <- lm(log_price~bathrooms+beds+bedrooms, data= df.ny.mlr2)
+summary(model)
+
+model <- lm(log_price~accommodates+bathrooms, data= df.ny.mlr2)
+summary(model)
+
+model <- lm(log_price~accommodates+bedrooms, data= df.ny.mlr2)
+summary(model)
+
+model <- lm(log_price~beds+bedrooms, data= df.ny.mlr2)
+summary(model)
+
+model <- lm(log_price~bedrooms+bathrooms, data= df.ny.mlr2)
+summary(model)
+```
+Then we ran through all the possible combinations and looked at the residual standard errors and p-values, with the summary function, to determine which models had the best quality and potential for being predictors for the log_price of NYC Airbnbs.
+
+```{r}
+########## best options for lm model ##########
+
+model1 <- lm(log_price~bathrooms+accommodates+bedrooms, data= df.ny.mlr2)
+summary(model1)
+
+model2 <- lm(log_price~accommodates+bedrooms, data= df.ny.mlr2)
+summary(model2)
+### these two models were not chose because bedrooms and accommodates have cor of .64 ###
+
+model3 <- lm(log_price~accommodates+bathrooms, data= df.ny.mlr2)
+summary(model3)
+
+summary(model1$residuals)
+
+#model 1 residual sum of squares
+RSS <- c(crossprod(model1$residuals))
+
+# mean squared error
+MSE <- RSS/length(model1$residuals)
+
+RMSE <- sqrt(MSE)
+
+summary(model2$residuals)
+summary(model3$residuals)
+
+```
+The top three models we ended up in question were the following combinations: accommodates and bedrooms, accommodates and bathrooms, and bedrooms, accommodates and bathrooms.  These all had very low p-values of less than $2.2e^{-16}$, which is desirable, as this indicates our model has less than 1% chance of predicting a value outside of the model.  In statistics, an acceptable p-value is anything less than 5% or $.05$
+
+ B. Show a screenshot of your regression summary, and explain the regression equation that it generated.  
+    + What is the r-squared of your model? What does this mean?  
+    + What is the RMSE of your model? What does this mean?  
+  ANSWER: The regression equation that can be derived from the summary above is: $y = [0.2(x$~1~$) + 0.01(x$~2~$)] + 4.15$, where x~1~= accommodates and x~2~ = bathrooms.  This equation was found by using the summary function to determine the intercept ($b$) as 4.15 and the slopes or ($m$) for accommodates $(.2)$ and bathrooms $(.01)$.  The r-squared of our model is 0.3075.  R-squared essentially explains the variation in the Y and is often used to determine the quality of a model. Typically, a desirable r-squared value is under .50, and we are well under this threshold and we know our p-value is also in a good place.  This number helped us decide among the different model summaries for the one we felt would produce the best predictions for NYC Airbnb log_prices.   The RMSE or residual standard error is 0.5505, which falls slightly above the range that is typically recommended for a model.  The standard threshold we follow in linear regression analysis, is usually between .2 and .5.  This model is quite close to .5, and the data is not going to be ‘perfect’ or yield a ‘perfect’ result.  Out of the potential models we created, this one has the best and we can determine the quality of this model overall is acceptable.
+    
+## Step III: Classification (40 points)  
+**I. Using *k-nearest neighbors*, predict whether a rental in your city would have a cleaning fee. Use any set of predictors in order to build this model.**  
+  A. Show the code you used to run your model, and the code you used to assess your model.
+```{r}
+########## STEP 3: Classification ##########
+
+# Part 1: K nearest neighbors
+# Partitioning data: 60 for training, 40 for testing, seed = 90
+set.seed(90)
+test_size = 0.4
+clean_predictors = c("cleaning_fee", "log_price", "review_scores_rating", "host_since", 
+                     "accommodates", "number_of_reviews")
+clean_data = df.ny
+clean_data$cleaning_fee = as.factor(clean_data$cleaning_fee)
+clean_data$host_since = as.numeric(clean_data$host_since)
+clean_sample = sample.split(clean_data, SplitRatio = test_size)
+train_data = subset(clean_data, clean_sample == FALSE)
+test_data  = subset(clean_data, clean_sample == TRUE)
+
+#Subseting correct predictors
+clean_train_data = train_data[clean_predictors]
+clean_test_data = test_data[clean_predictors]
+
+```
+Before we tackle the building of K nearest neighbors, we need to split our data into our training and testing data. Here, we chose 5 accompanying predictors for the cleaning_fee prediction of our model. The reasons for choosing these are because:  
+- cleaning_fee can be included in log_price, thus a lower log_price would usually result in no cleaning_fee/  
+- cleaning_fee can be included because of certain review_scores_rating, and a higher rating might be resulted from having cleaning_fee included in log_price.  
+- cleaning_fee could be enforced by the host, if they are a seasoned host, and know what to enforce.  
+- cleaning_fee could also be included, if the number of accommodates are too high, or too low.  
+- a high number of reviews would include complains/complements about the cleanliness of the place, hence endorce the cleaning_fee or disapprove it.  
+The data is then also splitted into a ratio of 60-40.  
+
+```{r}
+# Normalized and preprocess
+random_house = data.frame(
+  log_price = 3.8,
+  review_scores_rating = 0.92,
+  host_since = 15425,
+  accommodates = 4,
+  number_of_reviews = 56
+)
+```
+We are also building a random airbnb place, with some random factors, so that it would work well with our model data. 
+
+```{r}
+norm_values = preProcess(clean_train_data[, c(2:6)], method = c("center", "scale"))
+train_norm = clean_train_data
+train_norm[, c(2:6)] = predict(norm_values, clean_train_data[, c(2:6)])
+test_norm = clean_test_data
+test_norm[, c(2:6)] = predict(norm_values, clean_test_data[, c(2:6)])
+random_house_norm = predict(norm_values, random_house)
+accuracy_clean = data.frame(k = seq(1, 50, 1), accuracy = rep(0, 50))
+for(i in c(1:50)){
+  knn.pred = knn(train = train_norm[, c(2:6)], 
+                 test = test_norm[, c(2:6)], 
+                 cl = train_norm[, 1], 
+                 k = i)
+  accuracy_clean[i, 2] = confusionMatrix(knn.pred, test_norm[, 1])$overall[1]
+}
+max_accuracy = which.max(accuracy_clean$accuracy) 
+cleaning_fee_predict <- knn(train = train_norm[, 2:6], 
+                            test = random_house_norm, 
+                            cl = train_norm[, 1], 
+                            k = max_accuracy)
+cleaning_fee_predict
+```
+  We are building a testing throughout k values from 1 to 50, to find which would mix well with our data. First, we normalized our numbers, and then through running knn for many values, we have stored those k in an accuracy table. From this table, we would take the k with the highest accuracy, and apply such k neighbourhood with our random_house above. This k is chose, for it is the one with the highest accuracy. 
+  
+**II. NaiveBayes**  
+  C. Using the log_price variable, create four similarly-sized bins, or categories, for the rental prices in your city (Pricey Digs, Above Average, Below Average, Student Budget).  
+```{r}
+# Partitioning data: 60 for training, 40 for testing, seed = 90
+naive_data = df.ny %>%
+  select(log_price, property_type, room_type, accommodates, cleaning_fee, neighbourhood)
+  
+naive_data$price_cat = cut(naive_data$log_price, 
+                           breaks = c(0.0, 1.9, 3.8, 5.7, max(naive_data$log_price)), 
+                           labels = c("Student Budget", "Below Average", "Above Average", "Pricey Digs"))
+naive_data$accommodates = as.factor(naive_data$accommodates)
+naive_data = naive_data[,-1]
+naive_data
+```
+With arbritrary values chose here at 25% of range, 50% and 75% as our breaks, the data will be split into 4 equal range of prices, and therefore assigned properly to our data.
+
+```{r}
+test_size = 0.4
+set.seed(90)
+price_sample = sample.split(naive_data, SplitRatio = test_size)
+train_price = subset(naive_data, price_sample == FALSE)
+test_price  = subset(naive_data, price_sample == TRUE)
+```
+We split the data again here, to 60-40 ratio for training and testing
+
+```{r}
+price_train_naive = naiveBayes(price_cat ~ ., data = train_price)
+price_prob = predict(price_train_naive, newdata = test_price, type = "raw")
+price_class = predict(price_train_naive, newdata = test_price)
+price_class
+```
+For running the naive bayes algorithm, we set our predictors to all available column in the dataset, and we train it using our training data. Afterwards, we set up our probabilities prediction and class predictions with the testing data. This will yield the a table of predicted class corresponding to the testing set. 
+
+```{r}
+final_predict = data.frame(actual = test_price$price_cat, predicted = price_class, price_prob)
+final_predict[test_price$accommodates == 3 & test_price$room_type == "Entire home/apt",]
+```
+Within our data, we filtered through it, and choose a place accommodates 4 people, and it has to be in Forest Hills. Our data stated that there are 9 places, with their respective probabilities in each of the catagories. 
+
+```{r}
+pred_price_class = predict(price_train_naive, newdata = train_price)
+confusionMatrix(pred_price_class, train_price$price_cat)
+
+pred_price_class = predict(price_train_naive, newdata = test_price)
+confusionMatrix(pred_price_class, test_price$price_cat)
+```
+However, instead of just checking and filtering against one type of places, we can test it against our training data and our testing data. Each shown a high percentage of accuracy:  
+- 87.42 % for our training data  
+- 86.46% for our testing data  
+  
+  
+**III. Classification Tree**
+  A. Build a classification tree that predicts the cancellation policy of an airbnb rental listing, with the outcome classes “flexible”, “moderate”, and “strict.”  
+```{r}
+classification_data = df.ny
+
+model <- rpart(cancellation_policy ~ log_price + accommodates + host_since +
+               first_review + cleaning_fee + instant_bookable + number_of_reviews +
+               review_scores_rating, data = classification_data, 
+               method = "class", cp = 0.005)
+rpart.plot(model)
+```
+  
+  B. Determine the ideal size of your tree using cross-validation.  
+```{r}
+test_size = 0.4
+set.seed(90)
+cancel_sample = sample.split(classification_data, SplitRatio = test_size)
+train_cancel = subset(classification_data, cancel_sample == FALSE)
+test_cancel  = subset(classification_data, cancel_sample == TRUE)
+```
+We split our data for training and testing, based on our cancellation_policy.
+
+```{r}
+train_cancel_model <- rpart(cancellation_policy ~ log_price + accommodates + host_since +
+                              first_review + cleaning_fee + instant_bookable + number_of_reviews +
+                              review_scores_rating, data = classification_data, 
+                            method = "class", cp = 0.00)
+cancel_info = printcp(train_cancel_model)
+cancel_info = data.frame(cancel_info)
+min_error_row = which.min(cancel_info$xerror)
+cancel_info[min_error_row, "nsplit"]
+```
+
+
+```{r}
+model_train_pred = predict(train_cancel_model, train_cancel, type = "class")
+confusionMatrix(model_train_pred, train_cancel$cancellation_policy)
+```
+
+
+```{r}
+model_test_pred = predict(train_cancel_model, test_cancel, type = "class")
+confusionMatrix(model_test_pred, test_cancel$cancellation_policy)
+```
+Using the training data model to check if the cancellation policy of the model matches against the one of the testing data set. An accuracy result much higher than our naive guessing means that our model is also acceptable. 
+
+```{r}
+test_cancel_model <- rpart(cancellation_policy ~ log_price + accommodates + host_since +
+                              first_review + cleaning_fee + instant_bookable + number_of_reviews +
+                              review_scores_rating, data = train_cancel, method = "class", 
+                           cp = cancel_info[min_error_row, "CP"])
+```
+Now, we use the cp with lowest standard error to see how much better our model is.
+
+```{r}
+model_train_pred2 = predict(test_cancel_model, train_cancel, type = "class")
+confusionMatrix(model_train_pred2, train_cancel$cancellation_policy)
+```
+
+
+```{r}
+model_test_pred2 = predict(test_cancel_model, test_cancel, type = "class")
+confusionMatrix(model_test_pred2, test_cancel$cancellation_policy)
+```
+Using the optimal data model to check if the cancellation policy of the model matches against the one of the testing data set. An accuracy result much higher than our naive guessing means that our model is also acceptable. The P-Value is also of the same magnitutde suggest acceptable and similar level of accuracy as our training model.
+  
+  C. Using rpart.plot and your choice of graphical parameters, show your tree model here.  
+```{r}
+rpart.plot(test_cancel_model)
+```
+  Here is our final plot.
+
+## Step IV: Clustering (15 points)
+**I. Perform either a k-means analysis or a hierarchical clustering analysis compare any selected list of neighborhoods in your city.**  
+* You may find this task far more manageable if you reduce the number of neighborhoods that you’re dealing with. The results will be more meaningful that way, too.  
+* Of any section of the project, this one offers the most opportunity to be creative and take risks. Think about feature engineering, too **how/when/where** can you create new variables based on existing ones?  
+* group_by() and summarize() from the tidyverse can be quite helpful here (or, if you prefer to use aggregate() and tapply(), those can help to accomplish a similar task.  
+
+```{r}
+nyhood2 <- df.ny[,-c(1,3,4,5,8,9,10,11,12,13,14,16,17,18,19,23)]
+head(nyhood2)
+```
+We are removing some columns from original data that were either NOT numerical or that didnt appear to be of a big importance 
+
+```{r}
+is.na(nyhood2)
+
+anyNA(nyhood2$log_price)
+anyNA(nyhood2$accommodates)
+anyNA(nyhood2$host_response_rate)
+anyNA(nyhood2$review_scores_rating)
+anyNA(nyhood2$number_of_reviews)
+anyNA(nyhood2$bedrooms)
+anyNA(nyhood2$beds)
+anyNA(nyhood2$neighbourhood)
+```
+We will be testing our data to find if there still are NA in our data, since this is a sensitive step.
+```{r}
+lapply(nyhood2,as.numeric)
+```
+At this step, we are making all of the variables into numeric, for the purpose of clustering
+
+
+```{r}
+##NA removals review scores ratings##
+anyNA(nyhood2$review_scores_rating)
+nyhood2$review_scores_rating[is.na(nyhood2$review_scores_rating)] <- median(nyhood2$review_scores_rating, na.rm = TRUE)
+anyNA(nyhood2$review_scores_rating)
+
+## BATHROOMS NA removal##
+anyNA(nyhood2$bathrooms)
+nyhood2[["bathrooms"]][is.na(nyhood2[["bathrooms"]])] <- 0
+head(nyhood2)
+median(nyhood2$bathrooms)
+median(nyhood2$bathrooms, na.rm = TRUE)
+mean(nyhood2$bathrooms)
+mean(nyhood2$bathrooms, na.rm = TRUE)
+nyhood2$bathrooms[is.na(nyhood2$bathrooms)] <- median(nyhood2$bathrooms, na.rm = TRUE)
+anyNA(nyhood2$bathrooms)
+
+
+
+##Host response rate NA removal##
+anyNA(nyhood2$host_response_rate)
+median(nyhood2$host_response_rate)
+median(nyhood2$host_response_rate, na.rm = TRUE)
+mean(nyhood2$host_response_rate, na.rm = TRUE)
+nyhood2$host_response_rate[is.na(nyhood2$host_response_rate)] <- median(nyhood2$host_response_rate, na.rm = TRUE)
+anyNA(nyhood2$host_response_rate)
+
+
+
+##BEDROOMS NA removal##
+anyNA(nyhood2$bedrooms)
+nyhood2[["bedrooms"]][is.na(nyhood2[["bedrooms"]])] <- 0
+median(nyhood2$bedrooms)
+median(nyhood2$bedrooms, na.rm = TRUE)
+mean(nyhood2$bedrooms, na.rm = TRUE)
+nyhood2$bedrooms[is.na(nyhood2$bedrooms)] <- median(nyhood2$bedrooms, na.rm = TRUE)
+anyNA(nyhood2$bedrooms)
+
+
+```
+From this step, we are removing NAs from review score rating, host response rate, bathrooms, and bedrooms.
+
+```{r}
+nyhood3 <- filter(nyhood2, neighbourhood %in% c("Williamsburg", "East Village", "Upper East Side",
+                                                "Mill Basin", "Concord", "Edenwald","Rossville", "Grant City", "Castle Hill",
+                                                "Elm Park", "The Bronx", "Manhattan Beach","Bronxdale", "Queens", "Riverdale",
+                                                "Hunts Point", "Times Square/Theatre District", "Brighton Beach",
+                                                "Noho", "Union Square", "Little Italy","Long Island City", "Chinatown", "Midtown",
+                                                "Park Slope", "Gramercy Park", "Tribeca","Upper West Side", "West Village", "Greenwich Village",
+                                                "Hell's Kitchen", "Brooklyn Heights"))
+summarise(nyhood3)
+```
+We begin filtering in order to shorten list of neighbourhoods for this clustering task 
+
+```{r}
+plot1 <- nyhood3 %>% 
+  ggplot(aes(x = "all neighbourhoods", y = accommodates)) + 
+  geom_jitter(width = .025, height = 0, size = 2, alpha = .5, color = "blue") +
+  labs(x = "", y="# of people")
+
+plot2 <-  nyhood3 %>%
+  ggplot(aes(x = "all neighbourhoods", y = bathrooms)) + 
+  geom_jitter(width = .02, height = 0, size = 2, alpha = .6,  color = "orange") +
+  labs(x = "", y="# of bathrooms")
+
+plot3 <-  nyhood3 %>%
+  ggplot(aes(x = "all neighbourhoods", y = number_of_reviews)) + 
+  geom_jitter(width = .02, height = 0, size = 2, alpha = .6,  color = "green") +
+  labs(x = "", y="# of reviews")
+
+plot4 <-  nyhood3 %>%
+  ggplot(aes(x = "all neighbourhoods", y = review_scores_rating)) + 
+  geom_jitter(width = .02, height = 0, size = 2, alpha = .6,  color = "red") +
+  labs(x = "", y="review scores rating")
+
+plot5 <-  nyhood3 %>%
+  ggplot(aes(x = "all neighbourhoods", y = bedrooms)) + 
+  geom_jitter(width = .02, height = 0, size = 2, alpha = .6,  color = "violet") +
+  labs(x = "", y="# of bedrooms")
+
+plot6 <- nyhood3 %>%
+  ggplot(aes(x = "all neighbourhoods", y = beds)) + 
+  geom_jitter(width = .02, height = 0, size = 2, alpha = .6,  color = "pink") +
+  labs(x = "", y="# of beds")
+
+grid.arrange(plot1, plot2, plot3, plot4, plot5, plot6)
+
+```
+These are linear plots for the data 
+These linear cluster plots are visualizing the clusters and groups of each variable by the #/amount of that variable for ALL neighborhoods in our analysis. 
+This helps in our cluster analysis as we can see where concentrations are from a high level perspective prior to diving deeper. At a high level, we can see that all neighborhoods have a 
+concentration of less than 4 bathrooms, less than 200 reviews, less than 5 bedrooms and 6 beds, and accommodate typically less than 9 people. Also, an interesting note is that lower review scores ratings are 
+fairly rare and most are above .60. 
+
+```{r}
+##for some reason the kmeans wouldn't function unless I dropped column 5...##
+nyhood4 = nyhood3
+nyhood4$neighbourhood <- as.numeric(as.factor(nyhood4$neighbourhood))
+anyNA(nyhood4)
+set.seed(250)
+```
+preparing Kmeans for cluster analysis
+
+
+```{r}
+kmeans(nyhood4, centers = 10, nstart = 25)
+
+
+##sum of squares within group##
+wssplot <- function(nyhood4, nc=20, seed=250){
+  wss <- (nrow(nyhood4)-1)*sum(apply(nyhood4,2,var))
+  for (i in 2:nc){
+    set.seed(seed)
+    wss[i] <- sum(kmeans(nyhood4, centers=i)$withinss)}
+  plot(1:nc, wss, type="b", xlab="Number of groups",
+       ylab="Sum of squares within a group")}
+
+wssplot(nyhood4, nc = 25)
+
+```
+**KMEANS**
+k = 4 did not get a good % between SS and total SS...(0%) - raised to k=10 and got 98% this is related to the compactness of the clustering or how similar the members are within the same group we can clearly identify that there is a group that FAR outweighs the other groups in terms of reviews given. That group tends to have more beds, accomodates more people receives a better host response. The price also fell in the middle in comarison to other groups/clusters
+
+```{r}
+res <-kmeans(nyhood4, 25)
+sil <-silhouette(res$cluster,dist(nyhood4))
+fviz_silhouette(sil)
+```
+
+The silhouette plot(below) gives evidence that our clustering using 25 groups is good because there’s no negative silhouette width and sizes are where they should be. A silhouette plot was run as well with the data to confirm no negative silhouette width and support the decision to go with center of 10 for kmeans
+
+```{r}
+nyhood3$cluster <- as.factor(res$cluster)
+
+p <- ggparcoord(nyhood3, c(3,4,6,7,8,9), "cluster", "std") + labs(x = "property details", y = "value (in standard-deviation units)", title = "Clustering")
+ggplotly(p)
+
+```
+Lastly, a cluster plot was used to access value/# of property details throughout the neighborhoods. This is another way of assessing the groupings, closeness and where the data tends to migrate with each other. This portion was extremely useful in being able to identify a few groups of customer bases as well based on accomodation data, review data, and related neighborhoods. 
+
+
+**II. Show your code and results, and write two paragraphs describing what you included in your model, and what you found about the neighborhoods. You do not need to bring in any outside sources here to assess your findings. (in other words, you don’t need to actually go out and research the neighborhoods).**   
+
+**Clustering Analysis Methods:**  
+The clustering analysis done related to NYC neighborhoods brought about many interesting insights related to neighborhoods, accommodations and the guests that stay there. In order to perform this analysis several items were leveraged for the clustering model. Kmeans analysis was the method of choice and linear plots were used to assess the variables initially. Initially started with K=4 and then worked the way up to a center of 10 as it gave the highest accuracy % of 98%.This measurement speaks to the compactness of the clustering, or how similar the members are within a group. From there we used an elbow chart to review sum of squares within a group. A silhouette plot was run as well with the data to confirm no negative silhouette width and support the decision to go with center of 10 for kmeans. Lastly, a cluster plot was used to access value/# of property details throughout the neighborhoods.  
+
+**About the Neighborhoods and Guests:**  
+After reviewing the data, groups and clusters we were able to obtain some valuable findings. Though some may be expected, they are helpful nonetheless. One of the clusters, where most of the trendy and/or touristy neighborhoods were grouped, saw a significantly higher amount of reviews. This is attributed to a few different factors; higher host response rate than most, higher number of beds as well as bedrooms. This group is labeled the Needy Nehemiahs; need attention(host), need privacy(bedroom), need beauty rest(bed) that is a real bed, not a couch. That combination for rentals found their way into the top 3 for review scores.  Another interesting group was the Expectations Met Mickeys; paid the highest out of all the rentals/neighborhoods, and their expectations were met therefore they were requiring a quick response host and don’t feel the need to leave a review(one of the lowest reviews left scores), but when they do its a highly rated review, as it was what they expected; no more, no less. Lastly, we have the Bargain Shopping Betsys(who are married to)Not Happy Hanks.  These were guests at accommodations that had the lowest number of bathrooms, bedrooms, beds in general and also had the lowest price tag. Though the host response rate was fairly high, most likely because of complaints, the review score ratings were the lowest of all the groups and neighborhood clusters. These neighborhoods tended to be the less expensive, less sought after neighborhoods that were farther away from tourist areas.  
+
+***
+## Step V: Conclusions (10 points)
+**I. Write a 3-5 paragraph summary that describes your overall process and experience with this assignment. How could these findings be useful? Who could benefit from the data mining that you have performed here? You already summarized your specific steps in some other parts of the write-up, so focus on the big picture here (do not not use the conclusion to simply describe everything you did in the other parts). Submit your final report as a PDF to Blackboard before the deadline listed on the assignment.**  
+
+The data and finding gathered from these studies could assist in determining areas to invest in a vacation rental/AirBnB as well as what combinations of behaviors and/or types of accomodations are most sought after. Investors, marketers, and owners of properties that are currently available could benefit from the data mining that you have performed here. You already summarized your specific steps in some other parts of the write-up, so focus on the big picture here (do not not use the conclusion to simply describe everything you did in the other parts). Many different aspects and data can be used to analyze something such as AirBnB performance, or to assist in marketing analysis and even investment consideration. Just like any other business, the data we reviewed told several different stories; Just because a host is responsive doesn’t necessarily mean it will be a successful visit for the guest as there may have been several problems. Also, size and location doesn’t always mean better reviews. It also depends on the guest and sometimes certain things are unavoidable. We were able to break down the several clusters into a few different groups that we believe really show how the same data points, in different combinations, can lead one into several different directions. Though, if you can locate valuable combinations then this type of data mining and analysis can be extremely helpful.
